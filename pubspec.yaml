@@ -1,0 +1,31 @@
+name: aq_security
+description: >
+  AQ Security — unified auth package.
+  Client mode: AQSecurityClient.init(endpoint) → AQSecurityService.
+  Server mode: AQAuthServer with full JWT, Google OAuth, session management.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  aq_schema:
+    path:
+      ../aq_schema
+  dart_vault:
+    path: ../dart_vault_package
+  # Shared
+  crypto: ^3.0.0
+  uuid: ^4.0.0
+  http: ^1.2.0
+  bcrypt: ^1.1.3
+  pointycastle: ^3.9.0
+
+  # Server-only (shelf ecosystem — pure Dart, safe to include)
+  shelf: ^1.4.0
+  shelf_router: ^1.1.0
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^4.0.0

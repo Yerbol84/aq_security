@@ -1,0 +1,18 @@
+name: server_auth
+description: AQ Security Auth Service - Full-featured authentication server
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.3.0
+
+dependencies:
+  shelf: ^1.4.0
+  shelf_router: ^1.1.0
+  aq_security:
+    path: ../..
+  aq_schema:
+    path: ../../aq_schema
+
+dev_dependencies:
+  lints: ^3.0.0

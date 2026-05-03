@@ -1,0 +1,63 @@
+{{ define "slack.default.title" }}
+[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}
+{{ end }}
+
+{{ define "slack.default.text" }}
+{{ range .Alerts }}
+*Alert:* {{ .Labels.alertname }} - `{{ .Labels.severity }}`
+*Summary:* {{ .Annotations.summary }}
+*Description:* {{ .Annotations.description }}
+*Details:*
+{{ range .Labels.SortedPairs }} • *{{ .Name }}:* `{{ .Value }}`
+{{ end }}
+{{ end }}
+{{ end }}
+
+{{ define "slack.default.footer" }}
+{{ if gt (len .Alerts.Firing) 0 }}Firing: {{ .Alerts.Firing | len }}{{ end }}
+{{ if gt (len .Alerts.Resolved) 0 }}Resolved: {{ .Alerts.Resolved | len }}{{ end }}
+{{ end }}
+
+{{ define "pagerduty.default.description" }}
+{{ .CommonAnnotations.summary }}
+{{ end }}
+
+{{ define "pagerduty.default.client" }}
+AQ Security Monitoring
+{{ end }}
+
+{{ define "email.default.subject" }}
+[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
+{{ end }}
+
+{{ define "email.default.html" }}
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { font-family: Arial, sans-serif; }
+  .alert { border: 1px solid #ddd; padding: 10px; margin: 10px 0; }
+  .critical { border-left: 5px solid #d32f2f; }
+  .warning { border-left: 5px solid #f57c00; }
+  .info { border-left: 5px solid #1976d2; }
+  .label { font-weight: bold; }
+</style>
+</head>
+<body>
+<h2>AQ Security Alert</h2>
+{{ range .Alerts }}
+<div class="alert {{ .Labels.severity }}">
+  <p><span class="label">Alert:</span> {{ .Labels.alertname }}</p>
+  <p><span class="label">Severity:</span> {{ .Labels.severity }}</p>
+  <p><span class="label">Summary:</span> {{ .Annotations.summary }}</p>
+  <p><span class="label">Description:</span> {{ .Annotations.description }}</p>
+  <p><span class="label">Status:</span> {{ .Status }}</p>
+  <p><span class="label">Started:</span> {{ .StartsAt }}</p>
+  {{ if .EndsAt }}
+  <p><span class="label">Ended:</span> {{ .EndsAt }}</p>
+  {{ end }}
+</div>
+{{ end }}
+</body>
+</html>
+{{ end }}

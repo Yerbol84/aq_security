@@ -1,0 +1,105 @@
+name: Load Testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to test'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      test_scenario:
+        description: 'Test scenario'
+        required: true
+        default: 'normal_load'
+        type: choice
+        options:
+          - normal_load
+          - rate_limit_test
+          - dos_simulation
+          - concurrent_users
+          - auth_load
+          - all
+
+jobs:
+  load-test:
+    name: Run Load Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup k6
+      run: |
+        sudo gpg -k
+        sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+        echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+        sudo apt-get update
+        sudo apt-get install k6
+
+    - name: Set target URL
+      run: |
+        if [ "${{ github.event.inputs.environment }}" == "production" ]; then
+          echo "TARGET_URL=https://api.your-domain.com" >> $GITHUB_ENV
+        else
+          echo "TARGET_URL=https://staging-api.your-domain.com" >> $GITHUB_ENV
+        fi
+
+    - name: Run normal load test
+      if: github.event.inputs.test_scenario == 'normal_load' || github.event.inputs.test_scenario == 'all'
+      run: |
+        k6 run --out json=results-normal.json load_tests/normal_load.js
+      env:
+        BASE_URL: ${{ env.TARGET_URL }}
+
+    - name: Run rate limit test
+      if: github.event.inputs.test_scenario == 'rate_limit_test' || github.event.inputs.test_scenario == 'all'
+      run: |
+        k6 run --out json=results-ratelimit.json load_tests/rate_limit_test.js
+      env:
+        BASE_URL: ${{ env.TARGET_URL }}
+
+    - name: Run DoS simulation
+      if: github.event.inputs.test_scenario == 'dos_simulation' || github.event.inputs.test_scenario == 'all'
+      run: |
+        k6 run --out json=results-dos.json load_tests/dos_simulation.js
+      env:
+        BASE_URL: ${{ env.TARGET_URL }}
+
+    - name: Run concurrent users test
+      if: github.event.inputs.test_scenario == 'concurrent_users' || github.event.inputs.test_scenario == 'all'
+      run: |
+        k6 run --out json=results-concurrent.json load_tests/concurrent_users.js
+      env:
+        BASE_URL: ${{ env.TARGET_URL }}
+
+    - name: Run auth load test
+      if: github.event.inputs.test_scenario == 'auth_load' || github.event.inputs.test_scenario == 'all'
+      run: |
+        k6 run --out json=results-auth.json load_tests/auth_load.js
+      env:
+        BASE_URL: ${{ env.TARGET_URL }}
+
+    - name: Upload results
+      uses: actions/upload-artifact@v3
+      with:
+        name: load-test-results
+        path: results-*.json
+
+    - name: Generate summary
+      run: |
+        echo "## Load Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "Environment: ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "Scenario: ${{ github.event.inputs.test_scenario }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        for file in results-*.json; do
+          if [ -f "$file" ]; then
+            echo "### $(basename $file .json)" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat "$file" | jq '.metrics' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+        done

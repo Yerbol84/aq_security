@@ -1,0 +1,191 @@
+---
+# PostgreSQL Backup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: production
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: postgres-backup
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: postgres-backup
+          containers:
+          - name: backup
+            image: postgres:15-alpine
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+              BACKUP_FILE="/backup/aq_security_${TIMESTAMP}.sql.gz"
+
+              echo "Starting backup at ${TIMESTAMP}"
+
+              # Create backup
+              pg_dump -h ${POSTGRES_HOST} -U ${POSTGRES_USER} -d ${POSTGRES_DB} | gzip > ${BACKUP_FILE}
+
+              echo "Backup created: ${BACKUP_FILE}"
+
+              # Verify backup
+              if [ -f "${BACKUP_FILE}" ]; then
+                SIZE=$(stat -f%z "${BACKUP_FILE}" 2>/dev/null || stat -c%s "${BACKUP_FILE}")
+                echo "Backup size: ${SIZE} bytes"
+
+                if [ ${SIZE} -lt 1000 ]; then
+                  echo "ERROR: Backup file too small, might be corrupted"
+                  exit 1
+                fi
+              else
+                echo "ERROR: Backup file not created"
+                exit 1
+              fi
+
+              # Cleanup old backups (keep last 30 days)
+              find /backup -name "aq_security_*.sql.gz" -mtime +30 -delete
+
+              echo "Backup completed successfully"
+            env:
+            - name: POSTGRES_HOST
+              value: "postgres"
+            - name: POSTGRES_DB
+              value: "aq_security"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: postgres-backup-pvc
+
+---
+# PersistentVolumeClaim for backups
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backup-pvc
+  namespace: production
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard
+
+---
+# ServiceAccount for backup job
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres-backup
+  namespace: production
+
+---
+# Secret for PostgreSQL credentials (template)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: production
+type: Opaque
+stringData:
+  username: "aq_user"
+  password: "CHANGE_ME"  # Replace with actual password
+
+---
+# Backup restore job (manual trigger)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-restore
+  namespace: production
+spec:
+  template:
+    metadata:
+      labels:
+        app: postgres-restore
+    spec:
+      restartPolicy: Never
+      serviceAccountName: postgres-backup
+      containers:
+      - name: restore
+        image: postgres:15-alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+
+          if [ -z "${BACKUP_FILE}" ]; then
+            echo "ERROR: BACKUP_FILE environment variable not set"
+            echo "Usage: kubectl set env job/postgres-restore BACKUP_FILE=aq_security_20260411_020000.sql.gz -n production"
+            exit 1
+          fi
+
+          BACKUP_PATH="/backup/${BACKUP_FILE}"
+
+          if [ ! -f "${BACKUP_PATH}" ]; then
+            echo "ERROR: Backup file not found: ${BACKUP_PATH}"
+            echo "Available backups:"
+            ls -lh /backup/
+            exit 1
+          fi
+
+          echo "Restoring from: ${BACKUP_PATH}"
+
+          # Drop existing connections
+          psql -h ${POSTGRES_HOST} -U ${POSTGRES_USER} -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${POSTGRES_DB}' AND pid <> pg_backend_pid();"
+
+          # Drop and recreate database
+          psql -h ${POSTGRES_HOST} -U ${POSTGRES_USER} -d postgres -c "DROP DATABASE IF EXISTS ${POSTGRES_DB};"
+          psql -h ${POSTGRES_HOST} -U ${POSTGRES_USER} -d postgres -c "CREATE DATABASE ${POSTGRES_DB};"
+
+          # Restore backup
+          gunzip -c ${BACKUP_PATH} | psql -h ${POSTGRES_HOST} -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+
+          echo "Restore completed successfully"
+        env:
+        - name: POSTGRES_HOST
+          value: "postgres"
+        - name: POSTGRES_DB
+          value: "aq_security"
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: username
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: password
+        - name: BACKUP_FILE
+          value: ""  # Set this when running the job
+        volumeMounts:
+        - name: backup-storage
+          mountPath: /backup
+      volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: postgres-backup-pvc

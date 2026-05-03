@@ -1,0 +1,198 @@
+# Docker Compose Stack для AQ Security
+# Production-ready окружение с мониторингом
+
+version: '3.8'
+
+services:
+  # Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aq-security-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - LOG_LEVEL=info
+      - PROMETHEUS_ENABLED=true
+      - DATABASE_URL=postgresql://aq_user:aq_password@postgres:5432/aq_security
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - aq-network
+    volumes:
+      - app-logs:/var/log/aq-security
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.port=8080"
+      - "prometheus.path=/metrics"
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: aq-security-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=aq_security
+      - POSTGRES_USER=aq_user
+      - POSTGRES_PASSWORD=aq_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aq_user -d aq_security"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aq-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: aq-security-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass redis_password
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aq-network
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aq-security-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml
+      - prometheus-data:/prometheus
+    networks:
+      - aq-network
+    depends_on:
+      - app
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aq-security-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - aq-network
+    depends_on:
+      - prometheus
+
+  # Alertmanager
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: aq-security-alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - alertmanager-data:/alertmanager
+    networks:
+      - aq-network
+
+  # Loki (Log aggregation)
+  loki:
+    image: grafana/loki:latest
+    container_name: aq-security-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/local-config.yaml
+      - loki-data:/loki
+    networks:
+      - aq-network
+
+  # Promtail (Log shipper)
+  promtail:
+    image: grafana/promtail:latest
+    container_name: aq-security-promtail
+    restart: unless-stopped
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/config.yml
+      - app-logs:/var/log/aq-security:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - aq-network
+    depends_on:
+      - loki
+
+  # Nginx (Reverse proxy)
+  nginx:
+    image: nginx:alpine
+    container_name: aq-security-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    networks:
+      - aq-network
+    depends_on:
+      - app
+      - grafana
+
+networks:
+  aq-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+  alertmanager-data:
+  loki-data:
+  app-logs:

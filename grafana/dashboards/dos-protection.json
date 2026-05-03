@@ -1,0 +1,87 @@
+{
+  "dashboard": {
+    "title": "AQ Security - DoS Protection",
+    "tags": ["aq-security", "dos-protection"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 1,
+    "refresh": "10s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Active Connections",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "dos_connections_active{job=\"aq-security\"}",
+            "legendFormat": "Active connections"
+          },
+          {
+            "expr": "dos_connections_max{job=\"aq-security\"}",
+            "legendFormat": "Max connections"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Connections per IP",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "dos_connections_per_ip{job=\"aq-security\"}",
+            "legendFormat": "{{ip}}"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "DoS Blocks by Reason",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "rate(dos_blocked_total{job=\"aq-security\"}[5m])",
+            "legendFormat": "{{reason}}"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Blocked IPs",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "count(dos_ip_blocked{job=\"aq-security\",blocked=\"true\"})"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Slowloris Attacks Detected",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(dos_slowloris_detected_total{job=\"aq-security\"}[5m])",
+            "legendFormat": "Slowloris attacks"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Request Validation Failures",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(dos_validation_failed_total{job=\"aq-security\"}[5m])",
+            "legendFormat": "{{reason}}"
+          }
+        ]
+      }
+    ]
+  }
+}

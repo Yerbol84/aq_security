@@ -1,0 +1,84 @@
+{
+  "dashboard": {
+    "title": "AQ Security - Rate Limiting",
+    "tags": ["aq-security", "rate-limiting"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 1,
+    "refresh": "10s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Rate Limit Blocks by Strategy",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "rate(rate_limit_blocked_total{job=\"aq-security\"}[5m])",
+            "legendFormat": "{{strategy}}"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Rate Limit Allowed Requests",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "rate(rate_limit_allowed_total{job=\"aq-security\"}[5m])",
+            "legendFormat": "{{strategy}}"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Block Rate by Strategy",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "rate(rate_limit_blocked_total{job=\"aq-security\"}[5m]) / (rate(rate_limit_blocked_total{job=\"aq-security\"}[5m]) + rate(rate_limit_allowed_total{job=\"aq-security\"}[5m])) * 100",
+            "legendFormat": "{{strategy}} block rate %"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Top Blocked IPs",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "topk(10, sum by (ip) (rate(rate_limit_blocked_total{job=\"aq-security\"}[5m])))",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Token Bucket - Current Tokens",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "rate_limit_tokens_available{job=\"aq-security\",strategy=\"token_bucket\"}",
+            "legendFormat": "{{key}}"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Concurrent Requests",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "rate_limit_concurrent_requests{job=\"aq-security\"}",
+            "legendFormat": "{{key}}"
+          }
+        ]
+      }
+    ]
+  }
+}

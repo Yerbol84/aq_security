@@ -1,0 +1,231 @@
+groups:
+  - name: aq_security_critical
+    interval: 30s
+    rules:
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="aq-security",status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="aq-security"}[5m]))
+          ) * 100 > 5
+        for: 5m
+        labels:
+          severity: critical
+          component: application
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+      # Service down
+      - alert: ServiceDown
+        expr: up{job="aq-security"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: application
+        annotations:
+          summary: "AQ Security service is down"
+          description: "Service {{ $labels.instance }} has been down for more than 1 minute"
+
+      # High response time
+      - alert: HighResponseTime
+        expr: |
+          histogram_quantile(0.95,
+            rate(http_request_duration_seconds_bucket{job="aq-security"}[5m])
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          component: performance
+        annotations:
+          summary: "High response time detected"
+          description: "P95 response time is {{ $value }}s (threshold: 1s)"
+
+      # Database connection issues
+      - alert: DatabaseConnectionFailed
+        expr: |
+          rate(db_connection_errors_total{job="aq-security"}[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "Database connection failures"
+          description: "Database connection errors detected: {{ $value }} errors/s"
+
+      # Redis connection issues
+      - alert: RedisConnectionFailed
+        expr: |
+          rate(redis_connection_errors_total{job="aq-security"}[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: redis
+        annotations:
+          summary: "Redis connection failures"
+          description: "Redis connection errors detected: {{ $value }} errors/s"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (process_resident_memory_bytes{job="aq-security"} / 1024 / 1024) > 450
+        for: 5m
+        labels:
+          severity: warning
+          component: resources
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value }}MB (threshold: 450MB, limit: 512MB)"
+
+      # Pod restart loop
+      - alert: PodRestartLoop
+        expr: |
+          rate(kube_pod_container_status_restarts_total{namespace="production",pod=~"aq-security.*"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: kubernetes
+        annotations:
+          summary: "Pod is restarting frequently"
+          description: "Pod {{ $labels.pod }} has restarted {{ $value }} times in the last 15 minutes"
+
+  - name: aq_security_security
+    interval: 30s
+    rules:
+      # High rate limit blocks
+      - alert: HighRateLimitBlocks
+        expr: |
+          rate(rate_limit_blocked_total{job="aq-security"}[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: security
+        annotations:
+          summary: "High rate of rate limit blocks"
+          description: "Rate limit blocking {{ $value }} requests/s (threshold: 10/s)"
+
+      # DoS attack detected
+      - alert: DoSAttackDetected
+        expr: |
+          rate(dos_blocked_total{job="aq-security"}[1m]) > 50
+        for: 2m
+        labels:
+          severity: critical
+          component: security
+        annotations:
+          summary: "Potential DoS attack detected"
+          description: "DoS protection blocking {{ $value }} requests/s (threshold: 50/s)"
+
+      # High authentication failure rate
+      - alert: HighAuthFailureRate
+        expr: |
+          (
+            sum(rate(auth_attempts_total{job="aq-security",result="failure"}[5m]))
+            /
+            sum(rate(auth_attempts_total{job="aq-security"}[5m]))
+          ) * 100 > 30
+        for: 5m
+        labels:
+          severity: warning
+          component: security
+        annotations:
+          summary: "High authentication failure rate"
+          description: "Auth failure rate is {{ $value | humanizePercentage }} (threshold: 30%)"
+
+      # Suspicious activity - multiple IPs blocked
+      - alert: MultipleIPsBlocked
+        expr: |
+          count(dos_ip_blocked{job="aq-security",blocked="true"}) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: security
+        annotations:
+          summary: "Multiple IPs blocked"
+          description: "{{ $value }} IPs are currently blocked (threshold: 10)"
+
+  - name: aq_security_performance
+    interval: 1m
+    rules:
+      # Low throughput
+      - alert: LowThroughput
+        expr: |
+          sum(rate(http_requests_total{job="aq-security"}[5m])) < 10
+        for: 10m
+        labels:
+          severity: warning
+          component: performance
+        annotations:
+          summary: "Low request throughput"
+          description: "Throughput is {{ $value }} req/s (threshold: 10 req/s)"
+
+      # Database query slow
+      - alert: SlowDatabaseQueries
+        expr: |
+          histogram_quantile(0.95,
+            rate(db_query_duration_seconds_bucket{job="aq-security"}[5m])
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Slow database queries"
+          description: "P95 query time is {{ $value }}s (threshold: 0.5s)"
+
+      # Redis operation slow
+      - alert: SlowRedisOperations
+        expr: |
+          histogram_quantile(0.95,
+            rate(redis_operation_duration_seconds_bucket{job="aq-security"}[5m])
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Slow Redis operations"
+          description: "P95 operation time is {{ $value }}s (threshold: 0.1s)"
+
+  - name: aq_security_availability
+    interval: 1m
+    rules:
+      # Not enough healthy pods
+      - alert: NotEnoughHealthyPods
+        expr: |
+          count(up{job="aq-security"} == 1) < 2
+        for: 5m
+        labels:
+          severity: critical
+          component: kubernetes
+        annotations:
+          summary: "Not enough healthy pods"
+          description: "Only {{ $value }} healthy pods (minimum: 2)"
+
+      # HPA at max replicas
+      - alert: HPAAtMaxReplicas
+        expr: |
+          kube_horizontalpodautoscaler_status_current_replicas{namespace="production",horizontalpodautoscaler="aq-security"}
+          >=
+          kube_horizontalpodautoscaler_spec_max_replicas{namespace="production",horizontalpodautoscaler="aq-security"}
+        for: 15m
+        labels:
+          severity: warning
+          component: kubernetes
+        annotations:
+          summary: "HPA at maximum replicas"
+          description: "HPA has been at max replicas ({{ $value }}) for 15 minutes"
+
+      # Backup failed
+      - alert: BackupFailed
+        expr: |
+          kube_job_status_failed{namespace="production",job_name=~"postgres-backup.*"} > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: backup
+        annotations:
+          summary: "Database backup failed"
+          description: "Backup job {{ $labels.job_name }} has failed"

@@ -1,0 +1,263 @@
+# Prometheus Alert Rules для AQ Security
+# Файл: prometheus_alerts.yml
+#
+# Использование:
+# 1. Добавить в prometheus.yml:
+#    rule_files:
+#      - "prometheus_alerts.yml"
+#
+# 2. Настроить Alertmanager для отправки уведомлений
+
+groups:
+  - name: aq_security_critical
+    interval: 30s
+    rules:
+      # High Error Rate
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total[5m])) * 100 > 5
+        for: 2m
+        labels:
+          severity: critical
+          component: http
+        annotations:
+          summary: "High HTTP error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+      # Very High Error Rate
+      - alert: VeryHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total[5m])) * 100 > 10
+        for: 1m
+        labels:
+          severity: critical
+          component: http
+        annotations:
+          summary: "CRITICAL: Very high HTTP error rate"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 10%)"
+
+      # High Latency
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: http
+        annotations:
+          summary: "High request latency detected"
+          description: "P95 latency is {{ $value }}s (threshold: 1s)"
+
+      # Very High Latency
+      - alert: VeryHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 5
+        for: 2m
+        labels:
+          severity: critical
+          component: http
+        annotations:
+          summary: "CRITICAL: Very high request latency"
+          description: "P95 latency is {{ $value }}s (threshold: 5s)"
+
+  - name: aq_security_auth
+    interval: 30s
+    rules:
+      # Auth Failure Spike
+      - alert: AuthFailureSpike
+        expr: |
+          sum(increase(auth_attempts_total{success="false"}[5m])) > 50
+        for: 2m
+        labels:
+          severity: warning
+          component: auth
+        annotations:
+          summary: "Authentication failure spike detected"
+          description: "{{ $value }} failed auth attempts in last 5 minutes (threshold: 50)"
+
+      # Critical Auth Failure Spike
+      - alert: CriticalAuthFailureSpike
+        expr: |
+          sum(increase(auth_attempts_total{success="false"}[5m])) > 200
+        for: 1m
+        labels:
+          severity: critical
+          component: auth
+        annotations:
+          summary: "CRITICAL: Massive authentication failure spike"
+          description: "{{ $value }} failed auth attempts in last 5 minutes (threshold: 200). Possible brute force attack!"
+
+      # Low Auth Success Rate
+      - alert: LowAuthSuccessRate
+        expr: |
+          sum(rate(auth_attempts_total{success="true"}[5m]))
+          /
+          sum(rate(auth_attempts_total[5m])) * 100 < 50
+        for: 5m
+        labels:
+          severity: warning
+          component: auth
+        annotations:
+          summary: "Low authentication success rate"
+          description: "Auth success rate is {{ $value | humanizePercentage }} (threshold: 50%)"
+
+  - name: aq_security_rate_limiting
+    interval: 30s
+    rules:
+      # High Rate Limit Blocks
+      - alert: HighRateLimitBlocks
+        expr: |
+          sum(rate(rate_limit_blocked_total[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: rate_limiting
+        annotations:
+          summary: "High rate of rate limit blocks"
+          description: "{{ $value }} requests/sec are being rate limited (threshold: 10/s)"
+
+      # Critical Rate Limit Blocks
+      - alert: CriticalRateLimitBlocks
+        expr: |
+          sum(rate(rate_limit_blocked_total[5m])) > 50
+        for: 2m
+        labels:
+          severity: critical
+          component: rate_limiting
+        annotations:
+          summary: "CRITICAL: Very high rate limit blocks"
+          description: "{{ $value }} requests/sec are being rate limited (threshold: 50/s). Possible DoS attack!"
+
+  - name: aq_security_dos_protection
+    interval: 30s
+    rules:
+      # Connection Limit Warning
+      - alert: ConnectionLimitWarning
+        expr: active_connections > 800
+        for: 2m
+        labels:
+          severity: warning
+          component: dos_protection
+        annotations:
+          summary: "High number of active connections"
+          description: "{{ $value }} active connections (threshold: 800/1000)"
+
+      # Connection Limit Critical
+      - alert: ConnectionLimitCritical
+        expr: active_connections > 950
+        for: 1m
+        labels:
+          severity: critical
+          component: dos_protection
+        annotations:
+          summary: "CRITICAL: Connection limit nearly reached"
+          description: "{{ $value }} active connections (threshold: 950/1000). System may start rejecting connections!"
+
+      # High Connection Rejections
+      - alert: HighConnectionRejections
+        expr: |
+          sum(rate(connection_attempts_total{allowed="false"}[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: dos_protection
+        annotations:
+          summary: "High rate of connection rejections"
+          description: "{{ $value }} connections/sec are being rejected (threshold: 5/s)"
+
+      # IP Blocking Spike
+      - alert: IpBlockingSpike
+        expr: |
+          sum(increase(ip_blocked_total[5m])) > 10
+        for: 2m
+        labels:
+          severity: warning
+          component: dos_protection
+        annotations:
+          summary: "IP blocking spike detected"
+          description: "{{ $value }} IPs blocked in last 5 minutes (threshold: 10)"
+
+      # Critical IP Blocking
+      - alert: CriticalIpBlocking
+        expr: |
+          sum(increase(ip_blocked_total[5m])) > 50
+        for: 1m
+        labels:
+          severity: critical
+          component: dos_protection
+        annotations:
+          summary: "CRITICAL: Massive IP blocking activity"
+          description: "{{ $value }} IPs blocked in last 5 minutes (threshold: 50). Possible coordinated attack!"
+
+  - name: aq_security_permissions
+    interval: 30s
+    rules:
+      # High Permission Denials
+      - alert: HighPermissionDenials
+        expr: |
+          sum(rate(permission_checks_total{granted="false"}[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: permissions
+        annotations:
+          summary: "High rate of permission denials"
+          description: "{{ $value }} permission checks/sec are being denied (threshold: 10/s)"
+
+      # Policy Evaluation Failures
+      - alert: HighPolicyDenials
+        expr: |
+          sum(rate(policy_evaluations_total{allowed="false"}[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: permissions
+        annotations:
+          summary: "High rate of policy denials"
+          description: "{{ $value }} policy evaluations/sec are being denied (threshold: 10/s)"
+
+  - name: aq_security_availability
+    interval: 30s
+    rules:
+      # Service Down
+      - alert: ServiceDown
+        expr: up{job="aq_security"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: availability
+        annotations:
+          summary: "CRITICAL: AQ Security service is down"
+          description: "Service {{ $labels.instance }} is not responding to health checks"
+
+      # High Request Rate
+      - alert: HighRequestRate
+        expr: |
+          sum(rate(http_requests_total[5m])) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          component: availability
+        annotations:
+          summary: "High request rate detected"
+          description: "{{ $value }} requests/sec (threshold: 1000/s). System may be under heavy load."
+
+      # Critical Request Rate
+      - alert: CriticalRequestRate
+        expr: |
+          sum(rate(http_requests_total[5m])) > 5000
+        for: 2m
+        labels:
+          severity: critical
+          component: availability
+        annotations:
+          summary: "CRITICAL: Very high request rate"
+          description: "{{ $value }} requests/sec (threshold: 5000/s). Possible DoS attack or traffic spike!"

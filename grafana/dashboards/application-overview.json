@@ -1,0 +1,112 @@
+{
+  "dashboard": {
+    "title": "AQ Security - Application Overview",
+    "tags": ["aq-security", "overview"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "HTTP Requests per Second",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "rate(http_requests_total{job=\"aq-security\"}[5m])",
+            "legendFormat": "{{method}} {{path}}"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "HTTP Response Time (p95)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"aq-security\"}[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job=\"aq-security\"}[5m]))",
+            "legendFormat": "p99"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Error Rate",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "rate(http_requests_total{job=\"aq-security\",status=~\"5..\"}[5m])",
+            "legendFormat": "5xx errors"
+          },
+          {
+            "expr": "rate(http_requests_total{job=\"aq-security\",status=~\"4..\"}[5m])",
+            "legendFormat": "4xx errors"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Active Connections",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "dos_connections_active{job=\"aq-security\"}",
+            "legendFormat": "Active connections"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Rate Limit Blocks",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(rate_limit_blocked_total{job=\"aq-security\"}[5m])"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "DoS Blocks",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(dos_blocked_total{job=\"aq-security\"}[5m])"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Auth Success Rate",
+        "type": "gauge",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(auth_attempts_total{job=\"aq-security\",result=\"success\"}[5m]) / rate(auth_attempts_total{job=\"aq-security\"}[5m]) * 100"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Memory Usage",
+        "type": "gauge",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 16},
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes{job=\"aq-security\"} / 1024 / 1024"
+          }
+        ]
+      }
+    ]
+  }
+}

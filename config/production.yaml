@@ -1,0 +1,99 @@
+# Production Configuration
+# config/production.yaml
+
+server:
+  port: 8080
+  host: 0.0.0.0
+
+logging:
+  level: info
+  format: json
+  include_stack_trace: true
+
+metrics:
+  enabled: true
+  path: /metrics
+
+rate_limiting:
+  enabled: true
+  max_requests: 100
+  window_seconds: 60
+
+dos_protection:
+  enabled: true
+  max_connections: 1000
+  max_connections_per_ip: 10
+
+security_headers:
+  enabled: true
+  x_frame_options: DENY
+  x_content_type_options: nosniff
+  x_xss_protection: 1; mode=block
+  strict_transport_security: max-age=31536000; includeSubDomains; preload
+  referrer_policy: strict-origin-when-cross-origin
+  permissions_policy: geolocation=(), microphone=(), camera=()
+  content_security_policy: |
+    default-src 'self';
+    script-src 'self' 'unsafe-inline';
+    style-src 'self' 'unsafe-inline';
+    img-src 'self' data: https:;
+    font-src 'self' data:;
+    connect-src 'self';
+    frame-ancestors 'none';
+
+cors:
+  enabled: true
+  allowed_origins:
+    - https://your-domain.com
+    - https://app.your-domain.com
+  allowed_methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  allow_credentials: true
+  max_age: 3600
+
+database:
+  host: ${DATABASE_HOST}
+  port: 5432
+  database: ${DATABASE_NAME}
+  user: ${DATABASE_USER}
+  password: ${DATABASE_PASSWORD}
+  max_connections: 20
+  ssl_mode: require
+
+redis:
+  host: ${REDIS_HOST}
+  port: 6379
+  password: ${REDIS_PASSWORD}
+  db: 0
+  tls_enabled: true
+
+secrets:
+  jwt_secret: ${JWT_SECRET}
+  encryption_key: ${ENCRYPTION_KEY}
+
+monitoring:
+  prometheus:
+    enabled: true
+    port: 8080
+    path: /metrics
+
+  grafana:
+    enabled: true
+    url: https://grafana.your-domain.com
+
+  alertmanager:
+    enabled: true
+    url: http://alertmanager:9093
+
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2am
+  retention_days: 30
+
+audit:
+  enabled: true
+  retention_days: 90

@@ -1,0 +1,198 @@
+global:
+  # Глобальные настройки для всех получателей
+  resolve_timeout: 5m
+  slack_api_url: 'https://hooks.slack.com/services/YOUR_SLACK_WEBHOOK_URL'
+
+# Шаблоны для форматирования уведомлений
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Маршрутизация алертов
+route:
+  # Группировка алертов по меткам
+  group_by: ['alertname', 'cluster', 'service']
+
+  # Время ожидания перед отправкой первого уведомления
+  group_wait: 10s
+
+  # Время ожидания перед отправкой уведомления о новых алертах в группе
+  group_interval: 10s
+
+  # Минимальное время между повторными уведомлениями
+  repeat_interval: 12h
+
+  # Получатель по умолчанию
+  receiver: 'team-notifications'
+
+  # Специфичные маршруты для разных типов алертов
+  routes:
+    # Критические алерты - немедленное уведомление в PagerDuty
+    - match:
+        severity: critical
+      receiver: 'pagerduty-critical'
+      group_wait: 0s
+      group_interval: 5m
+      repeat_interval: 4h
+      continue: true  # Продолжить обработку другими маршрутами
+
+    # Критические алерты также в Slack
+    - match:
+        severity: critical
+      receiver: 'slack-critical'
+      group_wait: 0s
+      group_interval: 5m
+      repeat_interval: 4h
+
+    # Алерты безопасности - отдельный канал
+    - match:
+        component: security
+      receiver: 'slack-security'
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 6h
+
+    # Алерты производительности
+    - match:
+        component: performance
+      receiver: 'slack-performance'
+      group_wait: 1m
+      group_interval: 10m
+      repeat_interval: 12h
+
+    # Алерты базы данных
+    - match:
+        component: database
+      receiver: 'slack-database'
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 6h
+
+    # Алерты Kubernetes
+    - match:
+        component: kubernetes
+      receiver: 'slack-infrastructure'
+      group_wait: 1m
+      group_interval: 10m
+      repeat_interval: 12h
+
+# Подавление дублирующихся алертов
+inhibit_rules:
+  # Если сервис недоступен, подавить все остальные алерты от него
+  - source_match:
+      alertname: 'ServiceDown'
+    target_match_re:
+      alertname: '.*'
+    equal: ['instance']
+
+  # Если pod перезагружается, подавить алерты о высоком использовании ресурсов
+  - source_match:
+      alertname: 'PodRestartLoop'
+    target_match:
+      alertname: 'HighMemoryUsage'
+    equal: ['pod']
+
+  # Если база данных недоступна, подавить алерты о медленных запросах
+  - source_match:
+      alertname: 'DatabaseConnectionFailed'
+    target_match:
+      alertname: 'SlowDatabaseQueries'
+    equal: ['instance']
+
+# Получатели уведомлений
+receivers:
+  # Основной канал команды
+  - name: 'team-notifications'
+    slack_configs:
+      - channel: '#aq-security-alerts'
+        title: 'AQ Security Alert'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Labels.alertname }}
+          *Severity:* {{ .Labels.severity }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+
+  # Критические алерты в PagerDuty
+  - name: 'pagerduty-critical'
+    pagerduty_configs:
+      - service_key: 'YOUR_PAGERDUTY_SERVICE_KEY'
+        description: '{{ .CommonAnnotations.summary }}'
+        details:
+          firing: '{{ .Alerts.Firing | len }}'
+          resolved: '{{ .Alerts.Resolved | len }}'
+          alertname: '{{ .CommonLabels.alertname }}'
+
+  # Критические алерты в Slack
+  - name: 'slack-critical'
+    slack_configs:
+      - channel: '#aq-security-critical'
+        color: 'danger'
+        title: '🚨 CRITICAL: {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Instance:* {{ .Labels.instance }}
+          {{ end }}
+        send_resolved: true
+        actions:
+          - type: button
+            text: 'View in Grafana'
+            url: 'https://grafana.example.com/d/aq-security'
+          - type: button
+            text: 'View in Prometheus'
+            url: 'https://prometheus.example.com/alerts'
+
+  # Алерты безопасности
+  - name: 'slack-security'
+    slack_configs:
+      - channel: '#aq-security-security'
+        color: 'warning'
+        title: '🔒 Security Alert: {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+
+  # Алерты производительности
+  - name: 'slack-performance'
+    slack_configs:
+      - channel: '#aq-security-performance'
+        color: '#FFA500'
+        title: '⚡ Performance Alert: {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+
+  # Алерты базы данных
+  - name: 'slack-database'
+    slack_configs:
+      - channel: '#aq-security-database'
+        color: 'warning'
+        title: '💾 Database Alert: {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+
+  # Алерты инфраструктуры
+  - name: 'slack-infrastructure'
+    slack_configs:
+      - channel: '#aq-security-infrastructure'
+        color: '#0000FF'
+        title: '☸️ Infrastructure Alert: {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true

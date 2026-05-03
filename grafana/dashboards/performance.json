@@ -1,0 +1,124 @@
+{
+  "dashboard": {
+    "title": "AQ Security - Performance",
+    "tags": ["aq-security", "performance"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Request Latency Percentiles",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{job=\"aq-security\"}[5m]))",
+            "legendFormat": "p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"aq-security\"}[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job=\"aq-security\"}[5m]))",
+            "legendFormat": "p99"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Throughput (req/s)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(http_requests_total{job=\"aq-security\"}[5m]))",
+            "legendFormat": "Total req/s"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Database Query Time",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(db_query_duration_seconds_bucket{job=\"aq-security\"}[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(db_query_duration_seconds_bucket{job=\"aq-security\"}[5m]))",
+            "legendFormat": "p99"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Redis Operation Time",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(redis_operation_duration_seconds_bucket{job=\"aq-security\"}[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(redis_operation_duration_seconds_bucket{job=\"aq-security\"}[5m]))",
+            "legendFormat": "p99"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "CPU Usage",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(process_cpu_seconds_total{job=\"aq-security\"}[5m]) * 100",
+            "legendFormat": "CPU %"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Memory Usage",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes{job=\"aq-security\"} / 1024 / 1024",
+            "legendFormat": "Memory (MB)"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Goroutines",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "go_goroutines{job=\"aq-security\"}",
+            "legendFormat": "Goroutines"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "GC Pause Time",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+        "targets": [
+          {
+            "expr": "rate(go_gc_duration_seconds_sum{job=\"aq-security\"}[5m])",
+            "legendFormat": "GC pause"
+          }
+        ]
+      }
+    ]
+  }
+}
