@@ -10,6 +10,7 @@ final class SecurityConfig {
     this.accessTokenTtl = const Duration(minutes: 15),
     this.refreshTokenTtl = const Duration(days: 30),
     this.sessionTtl = const Duration(days: 30),
+    this.rbacCacheTtl = const Duration(minutes: 1),
     this.allowedOrigins = const [],
   });
 
@@ -25,6 +26,11 @@ final class SecurityConfig {
   final Duration accessTokenTtl;
   final Duration refreshTokenTtl;
   final Duration sessionTtl;
+
+  /// TTL для кэша RBAC решений.
+  /// Чем меньше — тем быстрее применяются изменения прав.
+  /// Default: 1 минута.
+  final Duration rbacCacheTtl;
 
   int get accessTokenTtlSeconds => accessTokenTtl.inSeconds;
   int get refreshTokenTtlSeconds => refreshTokenTtl.inSeconds;

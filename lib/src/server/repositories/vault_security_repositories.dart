@@ -17,22 +17,12 @@
 // LoggedStorable  → LoggedRepositoryImpl   (Session, ApiKey)
 
 import 'package:aq_schema/aq_schema.dart' hide AqRole, AqUserRole;
-import 'package:dart_vault/dart_vault.dart';
 import 'package:aq_schema/security/security.dart';
-import 'package:dart_vault/storage/direct_repository_impl.dart';
-import 'package:dart_vault/storage/logged_repository_impl.dart';
-
-import '../aq_auth_server.dart' show AuthServerRepos;
 
 // ── User ──────────────────────────────────────────────────────────────────────
 
 final class VaultUserRepository implements IUserRepository {
-  VaultUserRepository(VaultStorage s)
-      : _repo = DirectRepositoryImpl<StorableUser>(
-          storage: s,
-          collection: SecurityCollections.users,
-          fromMap: StorableUser.fromMap,
-        );
+  VaultUserRepository(this._repo);
 
   final DirectRepository<StorableUser> _repo;
 
@@ -92,12 +82,7 @@ final class VaultUserRepository implements IUserRepository {
 // ── Profile ───────────────────────────────────────────────────────────────────
 
 final class VaultProfileRepository implements IProfileRepository {
-  VaultProfileRepository(VaultStorage s)
-      : _repo = DirectRepositoryImpl<StorableProfile>(
-          storage: s,
-          collection: SecurityCollections.profiles,
-          fromMap: StorableProfile.fromMap,
-        );
+  VaultProfileRepository(this._repo);
 
   final DirectRepository<StorableProfile> _repo;
 
@@ -115,17 +100,11 @@ final class VaultProfileRepository implements IProfileRepository {
 // ── Role ──────────────────────────────────────────────────────────────────────
 
 final class VaultRoleRepository implements IRoleRepository {
-  VaultRoleRepository(VaultStorage s)
-      : _roleRepo = DirectRepositoryImpl<StorableRole>(
-          storage: s,
-          collection: SecurityCollections.roles,
-          fromMap: StorableRole.fromMap,
-        ),
-        _urRepo = DirectRepositoryImpl<StorableUserRole>(
-          storage: s,
-          collection: SecurityCollections.userRoles,
-          fromMap: StorableUserRole.fromMap,
-        );
+  VaultRoleRepository({
+    required DirectRepository<StorableRole> roles,
+    required DirectRepository<StorableUserRole> userRoles,
+  })  : _roleRepo = roles,
+        _urRepo = userRoles;
 
   final DirectRepository<StorableRole> _roleRepo;
   final DirectRepository<StorableUserRole> _urRepo;
@@ -166,6 +145,24 @@ final class VaultRoleRepository implements IRoleRepository {
   }
 
   @override
+  Future<AqRole?> findById(String id) async =>
+      (await _roleRepo.findById(id))?.domain;
+
+  @override
+  Future<List<AqRole>> getAllRoles() async {
+    final r = await _roleRepo.findAll();
+    return r.map((s) => s.domain).toList();
+  }
+
+  @override
+  Future<void> saveRole(AqRole role) async =>
+      await _roleRepo.save(StorableRole(role));
+
+  @override
+  Future<void> deleteRole(String roleId) async =>
+      await _roleRepo.delete(roleId);
+
+  @override
   Future<AqRole> create(AqRole role) async {
     await _roleRepo.save(StorableRole(role));
     return role;
@@ -197,12 +194,7 @@ final class VaultRoleRepository implements IRoleRepository {
 // ── Tenant ────────────────────────────────────────────────────────────────────
 
 final class VaultTenantRepository implements ITenantRepository {
-  VaultTenantRepository(VaultStorage s)
-      : _repo = DirectRepositoryImpl<StorableTenant>(
-          storage: s,
-          collection: SecurityCollections.tenants,
-          fromMap: StorableTenant.fromMap,
-        );
+  VaultTenantRepository(this._repo);
 
   final DirectRepository<StorableTenant> _repo;
 
@@ -242,12 +234,7 @@ final class VaultTenantRepository implements ITenantRepository {
 // ── Session — LoggedRepositoryImpl ────────────────────────────────────────────
 
 final class VaultSessionRepository implements ISessionRepository {
-  VaultSessionRepository(VaultStorage s)
-      : _repo = LoggedRepositoryImpl<StorableSession>(
-          storage: s,
-          collection: SecurityCollections.sessions,
-          fromMap: StorableSession.fromMap,
-        );
+  VaultSessionRepository(this._repo);
 
   final LoggedRepository<StorableSession> _repo;
   static const _sys = 'system';
@@ -335,12 +322,7 @@ final class VaultSessionRepository implements ISessionRepository {
 // ── ApiKey — LoggedRepositoryImpl ─────────────────────────────────────────────
 
 final class VaultApiKeyRepository implements IApiKeyRepository {
-  VaultApiKeyRepository(VaultStorage s)
-      : _repo = LoggedRepositoryImpl<StorableApiKey>(
-          storage: s,
-          collection: SecurityCollections.apiKeys,
-          fromMap: StorableApiKey.fromMap,
-        );
+  VaultApiKeyRepository(this._repo);
 
   final LoggedRepository<StorableApiKey> _repo;
   static const _sys = 'system';
@@ -430,17 +412,7 @@ final class VaultApiKeyRepository implements IApiKeyRepository {
   }
 }
 
-// ── Factory ───────────────────────────────────────────────────────────────────
-
-/// Создаёт все репозитории из одного VaultStorage.
-/// Storage может быть: InMemoryVaultStorage (тесты), DirectRepositoryImpl via
-/// PostgresVaultStorage (продакшн).
-AuthServerRepos vaultSecurityRepos(VaultStorage storage) => AuthServerRepos(
-      users: VaultUserRepository(storage),
-      profiles: VaultProfileRepository(storage),
-      roles: VaultRoleRepository(storage),
-      tenants: VaultTenantRepository(storage),
-      sessions: VaultSessionRepository(storage),
-      apiKeys: VaultApiKeyRepository(storage),
-      storage: storage, // Для RBAC репозиториев
-    );
+// Фабрика vaultSecurityRepos намеренно удалена.
+// Создание DirectRepositoryImpl/LoggedRepositoryImpl — ответственность
+// приложения-сервера (aq_auth_server.dart или main.dart),
+// где dart_vault является явной зависимостью.

@@ -13,7 +13,6 @@ export 'src/client/aq_vault_security_protocol.dart';
 
 // Shared config (client-safe portion)
 export 'src/shared/security_config.dart' show SecurityClientConfig;
-export 'src/server/repositories/vault_security_repositories.dart';
 
 // RBAC
 export 'src/rbac/rbac.dart';

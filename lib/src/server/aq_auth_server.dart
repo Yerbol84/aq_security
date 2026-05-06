@@ -24,6 +24,7 @@ import 'auth_router.dart';
 import 'introspection_router.dart';
 import 'rbac_router.dart';
 import 'middleware/auth_middleware.dart';
+import 'token_revocation_service.dart';
 import '../rbac/rbac_service.dart';
 import '../rbac/access_control_engine.dart';
 import 'repositories/rbac_repositories.dart';
@@ -37,7 +38,10 @@ final class AuthServerRepos {
     required this.tenants,
     required this.sessions,
     required this.apiKeys,
-    required this.storage,
+    required this.userRoles,
+    required this.policies,
+    required this.accessLogs,
+    required this.revokedTokens,
   });
 
   final IUserRepository users;
@@ -46,7 +50,10 @@ final class AuthServerRepos {
   final ITenantRepository tenants;
   final ISessionRepository sessions;
   final IApiKeyRepository apiKeys;
-  final dynamic storage; // VaultStorage для RBAC репозиториев
+  final IUserRoleRepository userRoles;
+  final IPolicyRepository policies;
+  final AccessLogRepository accessLogs;
+  final IRevokedTokenRepository revokedTokens;
 }
 
 final class AQAuthServer {
@@ -67,6 +74,8 @@ final class AQAuthServer {
   late final TokenCodec _codec = TokenCodec(secret: config.jwtSecret);
   late final TokenValidator _validator = TokenValidator(codec: _codec);
   late final TokenIssuer _issuer = TokenIssuer(config: config, codec: _codec);
+  late final TokenRevocationService _revocationService =
+      TokenRevocationService(repo: repos.revokedTokens);
 
   late final SessionService _sessions = SessionService(
     repo: repos.sessions,
@@ -90,20 +99,16 @@ final class AQAuthServer {
   late final ApiKeyService _apiKeyService = ApiKeyService(repo: repos.apiKeys);
 
   // RBAC services
-  late final RBACVaultRoleRepository _rbacRoleRepo =
-      RBACVaultRoleRepository(repos.storage);
-  late final VaultUserRoleRepository _rbacUserRoleRepo =
-      VaultUserRoleRepository(repos.storage);
-  late final VaultPolicyRepository _rbacPolicyRepo =
-      VaultPolicyRepository(repos.storage);
-  late final VaultAccessLogRepository _rbacAccessLogRepo =
-      VaultAccessLogRepository(repos.storage);
+  late final IRoleRepository _rbacRoleRepo = repos.roles;
+  late final IUserRoleRepository _rbacUserRoleRepo = repos.userRoles;
+  late final IPolicyRepository _rbacPolicyRepo = repos.policies;
+  late final AccessLogRepository _rbacAccessLogRepo = repos.accessLogs;
 
   late final AccessControlEngine _rbacEngine = AccessControlEngine(
     roleRepository: _rbacRoleRepo,
     userRoleRepository: _rbacUserRoleRepo,
     policyRepository: _rbacPolicyRepo,
-    cache: AccessCache(),
+    cache: null,
   );
 
   late final RBACService _rbacService = RBACService(
@@ -136,6 +141,7 @@ final class AQAuthServer {
       tokenIssuer: _issuer,
       apiKeyService: _apiKeyService,
       validator: _validator,
+      revocationService: _revocationService,
     );
 
     final rbacRouter = RBACRouter(_rbacService);

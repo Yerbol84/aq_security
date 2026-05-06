@@ -1,0 +1,13 @@
+name: aq_security_examples
+description: Examples for aq_security package
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  aq_security:
+    path: ..
+  aq_schema:
+    path: ../../aq_schema

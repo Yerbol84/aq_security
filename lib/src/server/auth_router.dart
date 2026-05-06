@@ -25,6 +25,7 @@ import 'github_oauth_service.dart';
 import 'user_service.dart';
 import 'session_service.dart';
 import 'token_issuer.dart';
+import 'token_revocation_service.dart';
 import 'api_key_service.dart';
 import 'middleware/auth_middleware.dart';
 import 'oauth/csrf_store.dart';
@@ -41,6 +42,7 @@ final class AuthRouter {
     required this.tokenIssuer,
     required this.apiKeyService,
     required this.validator,
+    this.revocationService,
     this.githubOAuth,
     this.healthService,
     CsrfStore? csrfStore,
@@ -60,6 +62,7 @@ final class AuthRouter {
   final TokenIssuer tokenIssuer;
   final ApiKeyService apiKeyService;
   final TokenValidator validator;
+  final TokenRevocationService? revocationService;
   final HealthService? healthService;
   final CsrfStore _csrfStore;
   final PkceStore _pkceStore;
@@ -930,10 +933,26 @@ final class AuthRouter {
     if (refreshToken == null) return _badRequest('refreshToken required');
 
     final result = validator.validateRefresh(refreshToken);
-    if (!result.valid)
-      return _unauthorized(result.message ?? 'Invalid refresh token');
+    if (!result.valid) return _unauthorized(result.message ?? 'Invalid refresh token');
 
     final claims = result.claims!;
+
+    // Reuse detection: если токен уже отозван
+    if (revocationService != null) {
+      final revokedToken = await revocationService!.getRevokedToken(claims.jti);
+      if (revokedToken != null) {
+        // Токен уже использован — возможная компрометация
+        if (revokedToken.reason == RevocationReasons.tokenRefreshed) {
+          // Отозвать всю сессию
+          await revocationService!.revokeAllSessionTokens(
+            sessionId: claims.sid,
+            reason: RevocationReasons.suspiciousActivity,
+          );
+          await sessionService.revoke(claims.sid, reason: 'token_reuse_detected');
+        }
+        return _unauthorized('token_reuse_detected');
+      }
+    }
 
     // Check session still valid
     final session = await sessionService.validate(claims.sid);
@@ -941,6 +960,14 @@ final class AuthRouter {
 
     final user = await userService.findById(claims.sub);
     if (user == null) return _unauthorized('User not found');
+
+    // Rotation: отозвать старый refresh token
+    if (revocationService != null) {
+      await revocationService!.revokeFromClaims(
+        claims: claims,
+        reason: RevocationReasons.tokenRefreshed,
+      );
+    }
 
     final roles = await userService.getRolesForUser(user.id, user.tenantId);
     final tokens = tokenIssuer.reissue(

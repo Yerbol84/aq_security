@@ -75,6 +75,13 @@ final class SessionService {
     await repo.revokeAllForUser(userId);
   }
 
+  /// Отметить что MFA пройден в данной сессии.
+  Future<void> markMfaVerified(String sessionId) async {
+    final session = await repo.findById(sessionId);
+    if (session == null || !session.isActive) return;
+    await repo.update(session.copyWith(mfaVerified: true));
+  }
+
   // ── Session listing ────────────────────────────────────────────────────────
 
   Future<List<AqSession>> listActive(String userId) =>

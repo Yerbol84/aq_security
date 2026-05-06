@@ -5,17 +5,15 @@
 // Клиент для auth сервиса — проверяет права через introspection endpoint,
 // шифрует чувствительные поля, валидирует данные, логирует операции.
 
-import 'package:aq_schema/security/interfaces/clients_protocols/i_data_layer_as_clietn_secure_protocol.dart';
-import 'package:aq_schema/security/models/aq_token_claims.dart';
-import 'package:aq_schema/security/models/aq_resource_permission.dart';
-import 'package:aq_schema/security/models/access_decision.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:aq_schema/security/security.dart';
-import 'package:aq_schema/security/token/token_codec.dart';
+import 'package:aq_schema/cache.dart';
 import 'package:aq_schema/http/responses/validation_field_error.dart';
 import 'introspection_client.dart';
 import 'field_encryption_service.dart';
 import '../server/rate_limiting/rate_limiter.dart';
-import '../server/dos_protection/request_validator.dart';
 
 /// Реализация IVaultSecurityProtocol для клиента.
 ///
@@ -44,9 +42,12 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
   AqVaultSecurityProtocol({
     required String introspectionEndpoint,
     required String encryptionKey,
+    String? auditEndpoint,
+    IResourcePermissionService? resourcePermissions,
     RateLimitConfig? rateLimitConfig,
-    RequestValidationConfig? validationConfig,
     Map<String, EncryptionConfig>? encryptionConfigs,
+    IAQCache? claimsCache,
+    IAQCache? decisionsCache,
   })  : _introspectionClient = IntrospectionClient(
           introspectionEndpoint: introspectionEndpoint,
         ),
@@ -60,22 +61,20 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
                 windowSeconds: 60,
               ),
         ),
-        _requestValidator = RequestValidator(
-          config: validationConfig ?? const RequestValidationConfig(),
-        ),
-        _encryptionConfigs = encryptionConfigs ?? {};
+        _encryptionConfigs = encryptionConfigs ?? {},
+        _resourcePermissions = resourcePermissions,
+        _auditEndpoint = auditEndpoint,
+        _claimsCache = claimsCache,
+        _decisionsCache = decisionsCache;
 
   final IntrospectionClient _introspectionClient;
   final FieldEncryptionService _encryptionService;
   final RateLimiter _rateLimiter;
-  final RequestValidator _requestValidator;
   final Map<String, EncryptionConfig> _encryptionConfigs;
-
-  // Кэш для claims (TTL 5 минут)
-  final Map<String, _CachedClaims> _claimsCache = {};
-
-  // Сервис управления правами на ресурсы (lazy initialization)
-  IResourcePermissionService? _resourcePermissionService;
+  final IResourcePermissionService? _resourcePermissions;
+  final String? _auditEndpoint;
+  final IAQCache? _claimsCache;
+  final IAQCache? _decisionsCache;
 
   // ══════════════════════════════════════════════════════════════════════════
   // Подсервисы
@@ -83,10 +82,13 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
 
   @override
   IResourcePermissionService get resourcePermissions {
-    // TODO: Инициализировать реальную реализацию
-    // Пока возвращаем заглушку
-    _resourcePermissionService ??= _NoOpResourcePermissionService();
-    return _resourcePermissionService!;
+    if (_resourcePermissions == null) {
+      throw StateError(
+        'ResourcePermissionService not configured. '
+        'Pass resourcePermissions: to AqVaultSecurityProtocol constructor.',
+      );
+    }
+    return _resourcePermissions;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -96,33 +98,21 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
   @override
   Future<AqTokenClaims?> extractClaims(Map<String, String> headers) async {
     final authHeader = headers['authorization'] ?? headers['Authorization'];
-    if (authHeader == null || authHeader.isEmpty) {
-      return null; // Анонимный запрос
-    }
+    if (authHeader == null || authHeader.isEmpty) return null;
 
-    // Извлечь токен из "Bearer <token>"
     final token =
         authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
 
-    // Проверить кэш
-    final cached = _claimsCache[token];
-    if (cached != null && !cached.isExpired) {
-      return cached.claims;
-    }
-
-    // Декодировать токен (без проверки подписи — это сделает introspection)
     try {
       final claims = TokenCodec.decodeUnverified(token);
 
-      // Кэшировать на 5 минут
-      _claimsCache[token] = _CachedClaims(
-        claims: claims,
-        cachedAt: DateTime.now(),
-      );
+      if (_claimsCache != null) {
+        await _claimsCache.put(claims);
+      }
 
       return claims;
     } catch (e) {
-      return null; // Невалидный токен
+      return null;
     }
   }
 
@@ -210,24 +200,27 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
     required String action,
     String? entityId,
   }) async {
-    // Анонимные запросы запрещены
     if (claims == null) {
       return AccessDecision.deny(reason: 'Anonymous access not allowed');
     }
 
-    // Маппинг коллекции на ResourceType
     final resourceType = _mapCollectionToResourceType(collection);
+    if (resourceType == null) {
+      return AccessDecision.deny(reason: 'Unknown collection: $collection');
+    }
 
-    // Получить токен из кэша (он там должен быть после extractClaims)
-    final token = _findTokenByClaims(claims);
-    if (token == null) {
-      return AccessDecision.deny(reason: 'Token not found');
+    final permission = '${resourceType.value}:$action';
+    final cacheKey = 'decision:${claims.sub}:$permission';
+
+    // Проверить кэш решений
+    if (_decisionsCache != null) {
+      final cached = await _decisionsCache.get<AccessDecision>(cacheKey);
+      if (cached != null) return cached;
     }
 
     try {
-      // Вызвать introspection endpoint
       final response = await _introspectionClient.introspect(
-        token: token,
+        token: claims.jti,
         resource: resourceType.value,
         action: action,
         resourceId: entityId ?? '*',
@@ -237,13 +230,25 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
         return AccessDecision.deny(reason: 'Token is not active');
       }
 
-      if (!response.allowed) {
-        return AccessDecision.deny(
-          reason: response.reason ?? 'Access denied',
-        );
+      final decision = response.allowed
+          ? AccessDecision.withCacheKey(
+              userId: claims.sub,
+              permission: permission,
+              allowed: true,
+              reason: 'Access granted',
+            )
+          : AccessDecision.withCacheKey(
+              userId: claims.sub,
+              permission: permission,
+              allowed: false,
+              reason: response.reason ?? 'Access denied',
+            );
+
+      if (_decisionsCache != null) {
+        await _decisionsCache.put(decision);
       }
 
-      return AccessDecision.allow(reason: 'Access granted');
+      return decision;
     } on IntrospectionException catch (e) {
       return AccessDecision.deny(reason: 'Introspection failed: ${e.message}');
     }
@@ -251,8 +256,9 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
 
   /// Маппинг коллекции на ResourceType.
   ///
-  /// Выбрасывает исключение для неизвестных коллекций.
-  ResourceType _mapCollectionToResourceType(String collection) {
+  /// Возвращает null для неизвестных коллекций — вызывающий код должен
+  /// вернуть AccessDecision.deny (principle of least privilege).
+  ResourceType? _mapCollectionToResourceType(String collection) {
     switch (collection) {
       case 'projects':
       case 'aq_studio_projects':
@@ -275,21 +281,8 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
       case 'sessions':
         return ResourceType.session;
       default:
-        throw UnknownCollectionException(
-          'Unknown collection: $collection. '
-          'All collections must be explicitly mapped to ResourceType.',
-        );
+        return null;
     }
-  }
-
-  /// Найти токен по claims в кэше.
-  String? _findTokenByClaims(AqTokenClaims claims) {
-    for (final entry in _claimsCache.entries) {
-      if (entry.value.claims.jti == claims.jti) {
-        return entry.key;
-      }
-    }
-    return null;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -332,21 +325,11 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
       ));
     }
 
-    // 2. Проверить на SQL injection паттерны
-    for (final entry in data.entries) {
-      if (entry.value is String) {
-        final value = entry.value as String;
-        if (_containsSqlInjection(value)) {
-          errors.add(ValidationFieldError(
-            field: entry.key,
-            message: 'Potential SQL injection detected',
-            code: 'sql_injection',
-          ));
-        }
-      }
-    }
+    // SQL injection prevention — ответственность ORM/query builder в data layer,
+    // не security layer. Regex-проверки здесь создают ложное ощущение безопасности
+    // и ломают легитимные данные (например, апостроф в имени O'Brien).
 
-    // 3. Проверить на XSS паттерны
+    // 2. Проверить на XSS паттерны
     for (final entry in data.entries) {
       if (entry.value is String) {
         final value = entry.value as String;
@@ -361,24 +344,6 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
     }
 
     return errors;
-  }
-
-  /// Проверить на SQL injection паттерны.
-  bool _containsSqlInjection(String value) {
-    final patterns = [
-      RegExp(r"('|(--)|;|\*|\/\*|\*\/)", caseSensitive: false),
-      RegExp(
-          r'\b(union|select|insert|update|delete|drop|create|alter|exec|execute)\b',
-          caseSensitive: false),
-    ];
-
-    for (final pattern in patterns) {
-      if (pattern.hasMatch(value)) {
-        return true;
-      }
-    }
-
-    return false;
   }
 
   /// Проверить на XSS паттерны.
@@ -455,108 +420,32 @@ final class AqVaultSecurityProtocol implements IVaultSecurityProtocol {
     required bool success,
     String? errorMessage,
   }) async {
-    // TODO: Реализовать audit logging
-    // Пока просто игнорируем — обсудим отдельно
+    if (claims == null || _auditEndpoint == null) return;
+    final endpoint = _auditEndpoint;
+
+    // fire-and-forget: не блокируем data layer
+    unawaited(Future(() async {
+      try {
+        await http.post(
+          Uri.parse(endpoint),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'userId': claims.sub,
+            'tenantId': claims.tid,
+            'operation': operation,
+            'collection': collection,
+            if (entityId != null) 'entityId': entityId,
+            'success': success,
+            if (errorMessage != null) 'errorMessage': errorMessage,
+            'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          }),
+        );
+      } catch (_) {}
+    }));
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════════════════════════
 // Вспомогательные классы
 // ══════════════════════════════════════════════════════════════════════════
-
-/// Кэшированные claims с TTL.
-final class _CachedClaims {
-  _CachedClaims({
-    required this.claims,
-    required this.cachedAt,
-  });
-
-  final AqTokenClaims claims;
-  final DateTime cachedAt;
-
-  bool get isExpired {
-    final age = DateTime.now().difference(cachedAt);
-    return age > const Duration(minutes: 5);
-  }
-}
-
-/// Исключение для неизвестной коллекции.
-final class UnknownCollectionException implements Exception {
-  const UnknownCollectionException(this.message);
-
-  final String message;
-
-  @override
-  String toString() => 'UnknownCollectionException: $message';
-}
-
-/// NoOp реализация IResourcePermissionService (заглушка).
-///
-/// Используется до тех пор, пока не будет реализован полноценный сервис
-/// управления правами на ресурсы.
-///
-/// Все методы возвращают пустые результаты или ничего не делают.
-final class _NoOpResourcePermissionService
-    implements IResourcePermissionService {
-  @override
-  Future<void> grant({
-    required String resourceId,
-    required String userId,
-    required AccessLevel level,
-    required String grantedBy,
-    DateTime? expiresAt,
-  }) async {
-    // NoOp: ничего не делаем
-  }
-
-  @override
-  Future<void> revoke({
-    required String resourceId,
-    required String userId,
-    required String revokedBy,
-  }) async {
-    // NoOp: ничего не делаем
-  }
-
-  @override
-  Future<List<AqResourcePermission>> list(String resourceId) async {
-    // NoOp: возвращаем пустой список
-    return [];
-  }
-
-  @override
-  Future<bool> hasAccess({
-    required String resourceId,
-    required String userId,
-    required AccessLevel minimumLevel,
-  }) async {
-    // NoOp: всегда возвращаем false
-    return false;
-  }
-
-  @override
-  Future<List<String>> listUserResources({
-    required String userId,
-    AccessLevel? minimumLevel,
-  }) async {
-    // NoOp: возвращаем пустой список
-    return [];
-  }
-
-  @override
-  Future<void> copyPermissions({
-    required String sourceResourceId,
-    required String targetResourceId,
-    required String copiedBy,
-  }) async {
-    // NoOp: ничего не делаем
-  }
-
-  @override
-  Future<void> deleteAllPermissions({
-    required String resourceId,
-    required String deletedBy,
-  }) async {
-    // NoOp: ничего не делаем
-  }
-}

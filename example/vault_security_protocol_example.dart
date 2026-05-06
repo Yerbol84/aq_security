@@ -1,158 +1,192 @@
 // pkgs/aq_security/example/vault_security_protocol_example.dart
 //
-// Пример использования AqVaultSecurityProtocol с dart_vault.
+// SCN-003: Демонстрация IVaultSecurityProtocol в embedded режиме.
+//
+// Показывает как data layer использует security protocol:
+// - extractClaims из HTTP headers
+// - canRead / canWrite / canDelete
+// - validateData
+// - logOperation (аудит)
+// - resourcePermissions (RLAC)
+//
+// Использует InMemoryVaultSecurityProtocol — без HTTP, без dart_vault.
 
-import 'dart:io';
-import 'package:aq_security/aq_security.dart';
-import 'package:aq_schema/security/interfaces/clients_protocols/i_data_layer_as_clietn_secure_protocol.dart';
-import 'package:aq_security/src/server/rate_limiting/rate_limiter.dart';
+import 'package:aq_schema/security/security.dart';
+import 'package:aq_schema/security/token/token_codec.dart';
+import 'package:aq_security/aq_security_server.dart';
 
 void main() async {
-  // ══════════════════════════════════════════════════════════════════════════
-  // 1. Инициализация Security Protocol
-  // ══════════════════════════════════════════════════════════════════════════
+  print('=== SCN-003: IVaultSecurityProtocol (embedded mode) ===\n');
 
-  final protocol = AqVaultSecurityProtocol(
-    // Endpoint для проверки токенов
-    introspectionEndpoint:
-        Platform.environment['AUTH_INTROSPECTION_ENDPOINT'] ??
-            'http://localhost:8080/introspect',
+  // ── 1. Инициализация ──────────────────────────────────────────────────────
 
-    // Ключ шифрования (минимум 32 символа)
-    encryptionKey: Platform.environment['ENCRYPTION_KEY'] ??
-        'default-encryption-key-32-chars-long-string-here',
-
-    // Опционально: конфигурация rate limiting
-    rateLimitConfig: const RateLimitConfig(
-      maxRequests: 1000, // 1000 запросов
-      windowSeconds: 60, // за 60 секунд
-      burstSize: 100, // burst до 100 запросов
-    ),
-
-    // Опционально: карты шифрования для коллекций
-    encryptionConfigs: {
-      'users': const EncryptionConfig(
-        fields: ['password', 'apiKey', 'secret'],
-      ),
-      'api_keys': const EncryptionConfig(
-        fields: ['key', 'secret'],
-      ),
-    },
-  );
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // 2. Регистрация singleton
-  // ══════════════════════════════════════════════════════════════════════════
-
+  // Создать in-memory протокол с дефолтными ролями (admin/editor/viewer)
+  final protocol = InMemoryVaultSecurityProtocol.withDefaults();
   IVaultSecurityProtocol.initialize(protocol);
 
-  print('✓ Security protocol initialized');
+  // Создать тестовые токены
+  const secret = 'test-secret-32-chars-long-string!';
+  final codec = TokenCodec(secret: secret);
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // 3. Использование в dart_vault
-  // ══════════════════════════════════════════════════════════════════════════
+  final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
-  // Теперь dart_vault автоматически использует security protocol:
-  //
-  // final storage = PostgresVaultStorage(
-  //   pool: pool,
-  //   tenantId: 'tenant-1',
-  //   headers: request.headers, // HTTP headers с токеном
-  // );
-  //
-  // await storage.read('projects', 'project-1'); // Проверит права автоматически
+  // Токен для editor
+  final editorToken = codec.encode(AqTokenClaims(
+    sub: 'user-editor',
+    tid: 'tenant-1',
+    email: 'editor@example.com',
+    type: TokenType.access,
+    roles: ['editor'],
+    scopes: ['projects:read', 'projects:write'],
+    iat: now,
+    exp: now + 900,
+    jti: 'jti-editor',
+    sid: 'session-editor',
+  ));
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // 4. Пример прямого использования
-  // ══════════════════════════════════════════════════════════════════════════
+  // Токен для viewer
+  final viewerToken = codec.encode(AqTokenClaims(
+    sub: 'user-viewer',
+    tid: 'tenant-1',
+    email: 'viewer@example.com',
+    type: TokenType.access,
+    roles: ['viewer'],
+    scopes: ['projects:read'],
+    iat: now,
+    exp: now + 900,
+    jti: 'jti-viewer',
+    sid: 'session-viewer',
+  ));
 
-  // Извлечь claims из headers
-  final claims = await protocol.extractClaims({
-    'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+  // Назначить роли
+  protocol.assignRole('user-editor', 'role-editor');
+  protocol.assignRole('user-viewer', 'role-viewer');
+
+  print('✓ Protocol initialized with roles: admin, editor, viewer');
+  print('✓ Tokens created for: user-editor, user-viewer\n');
+
+  // ── 2. extractClaims ──────────────────────────────────────────────────────
+
+  final editorClaims = await protocol.extractClaims({
+    'Authorization': 'Bearer $editorToken',
   });
+  print('extractClaims(editor): ${editorClaims?.sub} ✓');
 
-  if (claims != null) {
-    print('✓ Claims extracted: ${claims.sub}');
+  final anonClaims = await protocol.extractClaims({});
+  print('extractClaims(no token): ${anonClaims == null ? 'null (anonymous)' : 'ERROR'} ✓\n');
 
-    // Проверить права на чтение
-    final readDecision = await protocol.canRead(
-      claims: claims,
-      collection: 'projects',
-      entityId: 'project-1',
-    );
+  // ── 3. canRead ────────────────────────────────────────────────────────────
 
-    if (readDecision.allowed) {
-      print('✓ Read access allowed');
-    } else {
-      print('✗ Read access denied: ${readDecision.reason}');
-    }
+  final readDecision = await protocol.canRead(
+    claims: editorClaims,
+    collection: 'projects',
+    entityId: 'proj-1',
+  );
+  print('canRead(editor, projects): ${readDecision.allowed ? '✓ ALLOW' : '✗ DENY'} — ${readDecision.reason}');
 
-    // Проверить rate limit
-    final rateLimitOk = await protocol.checkRateLimit(
-      claims: claims,
-      operation: 'read',
-    );
+  final viewerClaims = await protocol.extractClaims({
+    'Authorization': 'Bearer $viewerToken',
+  });
+  final viewerReadDecision = await protocol.canRead(
+    claims: viewerClaims,
+    collection: 'projects',
+  );
+  print('canRead(viewer, projects): ${viewerReadDecision.allowed ? '✓ ALLOW' : '✗ DENY'}\n');
 
-    if (rateLimitOk) {
-      print('✓ Rate limit OK');
-    } else {
-      print('✗ Rate limit exceeded');
-    }
+  // ── 4. canWrite ───────────────────────────────────────────────────────────
 
-    // Валидация данных
-    final validationErrors = await protocol.validateData(
-      collection: 'projects',
-      data: {
-        'name': 'My Project',
-        'description': 'A safe description',
-      },
-    );
+  final writeDecision = await protocol.canWrite(
+    claims: editorClaims,
+    collection: 'projects',
+    data: {'name': 'My Project'},
+  );
+  print('canWrite(editor, projects): ${writeDecision.allowed ? '✓ ALLOW' : '✗ DENY'}');
 
-    if (validationErrors.isEmpty) {
-      print('✓ Data validation passed');
-    } else {
-      print('✗ Data validation failed:');
-      for (final error in validationErrors) {
-        print('  - ${error.field}: ${error.message}');
-      }
-    }
+  final viewerWriteDecision = await protocol.canWrite(
+    claims: viewerClaims,
+    collection: 'projects',
+    data: {'name': 'My Project'},
+  );
+  print('canWrite(viewer, projects): ${viewerWriteDecision.allowed ? '✓ ALLOW' : '✗ DENY — ${viewerWriteDecision.reason}'}\n');
 
-    // Шифрование чувствительных полей
-    final encrypted = await protocol.encryptSensitiveFields(
-      claims: claims,
-      collection: 'users',
-      data: {
-        'email': 'user@example.com',
-        'password': 'secret123',
-      },
-    );
+  // ── 5. canDelete ──────────────────────────────────────────────────────────
 
-    print('✓ Encrypted data: $encrypted');
-    // Результат: {'email': 'user@example.com', 'password': 'encrypted:...'}
+  final deleteDecision = await protocol.canDelete(
+    claims: editorClaims,
+    collection: 'projects',
+    entityId: 'proj-1',
+  );
+  print('canDelete(editor, projects): ${deleteDecision.allowed ? '✓ ALLOW' : '✗ DENY — ${deleteDecision.reason}'}');
 
-    // Расшифрование
-    final decrypted = await protocol.decryptSensitiveFields(
-      claims: claims,
-      collection: 'users',
-      data: encrypted,
-    );
+  // ── 6. Anonymous access ───────────────────────────────────────────────────
 
-    print('✓ Decrypted data: $decrypted');
-    // Результат: {'email': 'user@example.com', 'password': 'secret123'}
+  final anonDecision = await protocol.canRead(
+    claims: null,
+    collection: 'projects',
+  );
+  print('canRead(anonymous): ${anonDecision.allowed ? '✓ ALLOW' : '✗ DENY — ${anonDecision.reason}'}\n');
+
+  // ── 7. Unknown collection → graceful deny ─────────────────────────────────
+
+  final unknownDecision = await protocol.canRead(
+    claims: editorClaims,
+    collection: 'unknown_collection',
+  );
+  print('canRead(editor, unknown_collection): ${unknownDecision.allowed ? '✓ ALLOW' : '✗ DENY — ${unknownDecision.reason}'}\n');
+
+  // ── 8. validateData ───────────────────────────────────────────────────────
+
+  final validationErrors = await protocol.validateData(
+    collection: 'projects',
+    data: {'name': 'My Project', 'description': 'Safe content'},
+  );
+  print('validateData(safe data): ${validationErrors.isEmpty ? '✓ OK' : '✗ ${validationErrors.length} errors'}\n');
+
+  // ── 9. logOperation (аудит) ───────────────────────────────────────────────
+
+  await protocol.logOperation(
+    claims: editorClaims,
+    operation: 'read',
+    collection: 'projects',
+    entityId: 'proj-1',
+    success: true,
+  );
+  await protocol.logOperation(
+    claims: viewerClaims,
+    operation: 'write',
+    collection: 'projects',
+    success: false,
+    errorMessage: 'Permission denied',
+  );
+
+  print('Audit log (${protocol.auditLog.length} entries):');
+  for (final entry in protocol.auditLog) {
+    print('  $entry');
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // 5. Обработка неизвестных коллекций
-  // ══════════════════════════════════════════════════════════════════════════
+  // ── 10. resourcePermissions (RLAC) ────────────────────────────────────────
 
-  try {
-    await protocol.canRead(
-      claims: claims,
-      collection: 'unknown_collection',
-    );
-  } on UnknownCollectionException catch (e) {
-    print('✗ Unknown collection: $e');
-  }
+  print('\nResourcePermissions (RLAC):');
+  await protocol.resourcePermissions.grant(
+    resourceId: 'proj-secret',
+    userId: 'user-viewer',
+    level: AccessLevel.read,
+    grantedBy: 'user-editor',
+  );
 
-  print('\n✓ Example completed');
+  final hasAccess = await protocol.resourcePermissions.hasAccess(
+    resourceId: 'proj-secret',
+    userId: 'user-viewer',
+    minimumLevel: AccessLevel.read,
+  );
+  print('  viewer has read access to proj-secret: ${hasAccess ? '✓' : '✗'}');
+
+  final noAccess = await protocol.resourcePermissions.hasAccess(
+    resourceId: 'proj-secret',
+    userId: 'user-viewer',
+    minimumLevel: AccessLevel.write,
+  );
+  print('  viewer has write access to proj-secret: ${noAccess ? '✓' : '✗ (expected)'}');
+
+  print('\n✓ Example completed successfully');
 }

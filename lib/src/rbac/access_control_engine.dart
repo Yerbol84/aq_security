@@ -18,17 +18,12 @@ class AccessControlEngine {
     this.alertGenerator,
   });
 
-  /// Репозиторий ролей.
-  final RoleRepository roleRepository;
+  final IRoleRepository roleRepository;
+  final IUserRoleRepository userRoleRepository;
+  final IPolicyRepository policyRepository;
 
-  /// Репозиторий назначений ролей пользователям.
-  final UserRoleRepository userRoleRepository;
-
-  /// Репозиторий политик.
-  final PolicyRepository policyRepository;
-
-  /// Кэш решений о доступе.
-  final AccessCache? cache;
+  /// Кэш решений о доступе (IAQCache).
+  final IAQCache? cache;
 
   /// Сборщик метрик (опционально).
   final RbacMetricsCollector? metricsCollector;
@@ -36,34 +31,19 @@ class AccessControlEngine {
   /// Генератор оповещений (опционально).
   final AlertGenerator? alertGenerator;
 
-  /// Синхронная проверка доступа (из кэша).
-  bool canSync(String userId, String permission) {
-    if (cache == null) return false;
-
-    final cached = cache!.get(userId, permission);
-    if (cached != null && !cached.isExpired) {
-      // Записать метрику cache hit
-      metricsCollector?.recordCheck(
-        userId: userId,
-        resource: permission.split(':')[0],
-        action: permission.split(':')[1],
-        scope: permission.split(':')[2],
-        allowed: cached.allowed,
-        durationMs: 0,
-        fromCache: true,
-      );
-      return cached.allowed;
-    }
-
-    return false;
-  }
+  /// Синхронная проверка доступа — всегда false без кэша.
+  /// Используй [canAsync] для полной проверки.
+  bool canSync(String userId, String permission) => false;
 
   /// Асинхронная проверка доступа (полная проверка с политиками).
+  ///
+  /// Формат permission: 'resource:action'.
+  /// Scope передаётся через [context].userScopes — не встраивается в ключ.
   Future<AccessDecision> canAsync(
     String userId,
     String resource,
-    String action,
-    String scope, {
+    String action, {
+    String scope = '',
     AccessContext? context,
   }) async {
     final startTime = DateTime.now();
@@ -75,15 +55,16 @@ class AccessControlEngine {
 
     try {
       // 1. Проверить кэш
-      final permission = '$resource:$action:$scope';
-      final cached = cache?.get(userId, permission);
-      if (cached != null && !cached.isExpired) {
-        fromCache = true;
-        decision = AccessDecision(
-          allowed: cached.allowed,
-          reason: cached.reason,
-        );
-        return decision;
+      // Ключ кэша: 'resource:action' — scope не является частью permission key.
+      final permission = '$resource:$action';
+      final cacheKey = 'decision:$userId:$permission';
+      if (cache != null) {
+        final cached = await cache!.get<AccessDecision>(cacheKey);
+        if (cached != null) {
+          fromCache = true;
+          decision = cached;
+          return decision;
+        }
       }
 
       // 2. Получить роли пользователя
@@ -248,7 +229,7 @@ class AccessControlEngine {
 
     processedRoles.add(roleId);
 
-    final role = await roleRepository.getRole(roleId);
+    final role = await roleRepository.findById(roleId);
     if (role == null) return;
 
     // Добавить прямые права роли
@@ -284,7 +265,7 @@ class AccessControlEngine {
     AccessContext context,
   ) async {
     // Сортировать по приоритету (больше = выше)
-    policies.sort((a, b) => (b.priority ?? 0).compareTo(a.priority ?? 0));
+    policies.sort((a, b) => b.priority.compareTo(a.priority));
 
     final appliedPolicies = <String>[];
 
@@ -343,8 +324,6 @@ class AccessControlEngine {
         return _evaluateRoleCondition(condition, context);
       case PolicyConditionType.custom:
         return true; // Custom conditions not implemented yet
-      default:
-        return true; // Неизвестные условия игнорируем
     }
   }
 
@@ -518,119 +497,37 @@ class AccessControlEngine {
           }
         }
         return false;
-
-      default:
-        return true;
     }
   }
 
   void _cacheDecision(
       String userId, String permission, AccessDecision decision) {
-    cache?.set(userId, permission, decision);
-  }
-
-  /// Инвалидировать кэш для пользователя.
-  void invalidateUserCache(String userId) {
-    cache?.invalidateUser(userId);
+    if (cache == null) return;
+    final cacheable = AccessDecision.withCacheKey(
+      userId: userId,
+      permission: permission,
+      allowed: decision.allowed,
+      reason: decision.reason,
+      matchedRoles: decision.matchedRoles,
+      matchedPermissions: decision.matchedPermissions,
+      appliedPolicies: decision.appliedPolicies,
+      evaluationTimeMs: decision.evaluationTimeMs,
+    );
+    cache!.put(cacheable);
   }
 
   /// Инвалидировать весь кэш.
   void invalidateAllCache() {
     cache?.clear();
   }
-}
 
-/// Репозиторий ролей (интерфейс).
-abstract class RoleRepository {
-  Future<AqRole?> getRole(String roleId);
-  Future<List<AqRole>> getAllRoles();
-  Future<void> saveRole(AqRole role);
-  Future<void> deleteRole(String roleId);
-}
-
-/// Репозиторий назначений ролей (интерфейс).
-abstract class UserRoleRepository {
-  Future<List<AqUserRole>> getUserRoles(String userId);
-  Future<void> assignRole(AqUserRole userRole);
-  Future<void> revokeRole(String userId, String roleId);
-}
-
-/// Репозиторий политик (интерфейс).
-/// Репозиторий политик (интерфейс).
-abstract class PolicyRepository {
-  Future<List<AqAccessPolicy>> getEnabledPolicies();
-  Future<AqAccessPolicy?> getPolicy(String policyId);
-  Future<void> savePolicy(AqAccessPolicy policy);
-  Future<void> deletePolicy(String policyId);
-  Future<List<AqAccessPolicy>> getAllPolicies();
-}
-
-/// Кэш решений о доступе.
-class AccessCache {
-  AccessCache({
-    this.ttl = const Duration(minutes: 5),
-    this.maxSize = 10000,
-  });
-
-  final Duration ttl;
-  final int maxSize;
-  final Map<String, CachedDecision> _cache = {};
-
-  String _key(String userId, String permission) => '$userId:$permission';
-
-  CachedDecision? get(String userId, String permission) {
-    return _cache[_key(userId, permission)];
-  }
-
-  void set(String userId, String permission, AccessDecision decision) {
-    // Проверить размер кэша
-    if (_cache.length >= maxSize) {
-      _evictOldest();
-    }
-
-    _cache[_key(userId, permission)] = CachedDecision(
-      allowed: decision.allowed,
-      reason: decision.reason,
-      cachedAt: DateTime.now(),
-    );
-  }
-
+  /// Инвалидировать кэш для конкретного пользователя.
+  /// IAQCache не поддерживает wildcard evict — очищаем весь кэш.
   void invalidateUser(String userId) {
-    _cache.removeWhere((key, _) => key.startsWith('$userId:'));
-  }
-
-  void clear() {
-    _cache.clear();
-  }
-
-  void _evictOldest() {
-    if (_cache.isEmpty) return;
-
-    // Удалить 10% самых старых записей
-    final toRemove = (maxSize * 0.1).ceil();
-    final entries = _cache.entries.toList()
-      ..sort((a, b) => a.value.cachedAt.compareTo(b.value.cachedAt));
-
-    for (var i = 0; i < toRemove && i < entries.length; i++) {
-      _cache.remove(entries[i].key);
-    }
+    cache?.clear();
   }
 }
 
-/// Кэшированное решение.
-class CachedDecision {
-  CachedDecision({
-    required this.allowed,
-    this.reason,
-    required this.cachedAt,
-  });
 
-  final bool allowed;
-  final String? reason;
-  final DateTime cachedAt;
 
-  bool get isExpired {
-    final age = DateTime.now().difference(cachedAt);
-    return age > const Duration(minutes: 5);
-  }
-}
+

@@ -1,0 +1,19 @@
+include: package:lints/recommended.yaml
+
+analyzer:
+  exclude:
+    # Shelf-dependent files — require shelf/shelf_router from the app layer
+    - lib/src/server/aq_auth_server.dart
+    - lib/src/server/auth_router.dart
+    - lib/src/server/introspection_router.dart
+    - lib/src/server/rbac_router.dart
+    - lib/src/server/middleware/**
+    - lib/src/server/rate_limiting/rate_limit_middleware.dart
+    - lib/src/server/security_headers/security_middleware.dart
+    - lib/src/server/monitoring/metrics_middleware.dart
+    - lib/src/server/monitoring/metrics_handler.dart
+    - lib/src/server/logging/logging_middleware.dart
+    - lib/src/server/dos_protection/request_validator.dart
+    - lib/src/server/dos_protection/dos_protection_middleware.dart
+    # dart_vault adapter — requires dart_vault from the app layer
+    - lib/src/server/repositories/vault_security_repositories.dart

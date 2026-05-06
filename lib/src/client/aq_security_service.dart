@@ -13,6 +13,9 @@
 import 'dart:async';
 import 'package:aq_schema/security/security.dart';
 import 'http_auth_transport.dart';
+import 'http_role_management_service.dart';
+import 'http_policy_service.dart';
+import 'http_audit_service.dart';
 import 'local_session_store.dart';
 
 // ── Service ───────────────────────────────────────────────────────────────────
@@ -25,13 +28,22 @@ final class AQSecurityService implements ISecurityService {
     required HttpAuthTransport transport,
     required LocalSessionStore store,
     required TokenValidator validator,
+    required HttpRoleManagementService roleManagement,
+    required HttpPolicyService policies,
+    required HttpAuditService audit,
   })  : _transport = transport,
         _store = store,
-        _validator = validator;
+        _validator = validator,
+        _roleManagement = roleManagement,
+        _policies = policies,
+        _audit = audit;
 
   final HttpAuthTransport _transport;
   final LocalSessionStore _store;
   final TokenValidator _validator;
+  final HttpRoleManagementService _roleManagement;
+  final HttpPolicyService _policies;
+  final HttpAuditService _audit;
 
   final _controller = StreamController<SecurityState>.broadcast();
   SecurityState _state = const SecurityStateUnauthenticated();
@@ -219,18 +231,15 @@ final class AQSecurityService implements ISecurityService {
 
   // ── ISecurityService implementation ───────────────────────────────────────
 
-  // Подсервисы (TODO: реализовать)
+  // Подсервисы
   @override
-  IRoleManagementService get roleManagement => throw UnimplementedError(
-      'Role management not yet implemented. Use direct API calls.');
+  IRoleManagementService get roleManagement => _roleManagement;
 
   @override
-  IPolicyService get policies => throw UnimplementedError(
-      'Policy service not yet implemented. Use direct API calls.');
+  IPolicyService get policies => _policies;
 
   @override
-  IAuditService get audit => throw UnimplementedError(
-      'Audit service not yet implemented. Use direct API calls.');
+  IAuditService get audit => _audit;
 
   // Регистрация
   @override
@@ -239,8 +248,19 @@ final class AQSecurityService implements ISecurityService {
     required String password,
     String? displayName,
   }) async {
-    // TODO: Implement register in HttpAuthTransport
-    throw UnimplementedError('register() not yet implemented in transport layer');
+    _emit(const SecurityStateLoading());
+    try {
+      final response = await _transport.register(
+        email: email,
+        password: password,
+        displayName: displayName,
+      );
+      await _handleAuthResponse(response);
+      return response;
+    } catch (e) {
+      _emit(SecurityStateError(e.toString()));
+      rethrow;
+    }
   }
 
   // Обновление токенов
@@ -487,10 +507,23 @@ final class AQSecurityService implements ISecurityService {
   }) {
     final transport = HttpAuthTransport(baseUrl: endpoint);
     final store = LocalSessionStore();
-    return AQSecurityService._(
+    final service = AQSecurityService._(
       transport: transport,
       store: store,
       validator: validator,
+      roleManagement: HttpRoleManagementService(
+        baseUrl: endpoint,
+        tokenProvider: () async => store.getStoredTokens()?.accessToken,
+      ),
+      policies: HttpPolicyService(
+        baseUrl: endpoint,
+        tokenProvider: () async => store.getStoredTokens()?.accessToken,
+      ),
+      audit: HttpAuditService(
+        baseUrl: endpoint,
+        tokenProvider: () async => store.getStoredTokens()?.accessToken,
+      ),
     );
+    return service;
   }
 }

@@ -19,9 +19,9 @@ class RBACService {
   });
 
   final AccessControlEngine engine;
-  final RoleRepository roleRepository;
-  final UserRoleRepository userRoleRepository;
-  final PolicyRepository policyRepository;
+  final IRoleRepository roleRepository;
+  final IUserRoleRepository userRoleRepository;
+  final IPolicyRepository policyRepository;
   final AccessLogRepository? accessLogRepository;
 
   static final _uuid = Uuid();
@@ -59,7 +59,7 @@ class RBACService {
 
   /// Получить роль.
   Future<AqRole?> getRole(String roleId) async {
-    return await roleRepository.getRole(roleId);
+    return await roleRepository.findById(roleId);
   }
 
   /// Получить все роли.
@@ -76,7 +76,7 @@ class RBACService {
     List<String>? inheritsFrom,
     Map<String, dynamic>? metadata,
   }) async {
-    final existing = await roleRepository.getRole(roleId);
+    final existing = await roleRepository.findById(roleId);
     if (existing == null) {
       throw Exception('Role not found: $roleId');
     }
@@ -104,7 +104,7 @@ class RBACService {
 
   /// Добавить наследование роли.
   Future<void> addRoleInheritance(String roleId, String parentRoleId) async {
-    final role = await roleRepository.getRole(roleId);
+    final role = await roleRepository.findById(roleId);
     if (role == null) {
       throw Exception('Role not found: $roleId');
     }
@@ -129,7 +129,7 @@ class RBACService {
 
   /// Убрать наследование роли.
   Future<void> removeRoleInheritance(String roleId, String parentRoleId) async {
-    final role = await roleRepository.getRole(roleId);
+    final role = await roleRepository.findById(roleId);
     if (role == null) {
       throw Exception('Role not found: $roleId');
     }
@@ -162,7 +162,7 @@ class RBACService {
     if (processed.contains(roleId) || depth > 5) return;
     processed.add(roleId);
 
-    final role = await roleRepository.getRole(roleId);
+    final role = await roleRepository.findById(roleId);
     if (role == null) return;
 
     permissions.addAll(role.permissions);
@@ -184,7 +184,7 @@ class RBACService {
     if (visited.contains(currentId)) return false;
     visited.add(currentId);
 
-    final role = await roleRepository.getRole(currentId);
+    final role = await roleRepository.findById(currentId);
     if (role == null) return false;
 
     for (final parentId in role.inheritsFrom) {
@@ -218,7 +218,7 @@ class RBACService {
     );
 
     await userRoleRepository.assignRole(userRole);
-    engine.invalidateUserCache(userId);
+    engine.invalidateUser(userId);
 
     return userRole;
   }
@@ -246,7 +246,7 @@ class RBACService {
     );
 
     await userRoleRepository.assignRole(userRole);
-    engine.invalidateUserCache(userId);
+    engine.invalidateUser(userId);
 
     return userRole;
   }
@@ -254,7 +254,7 @@ class RBACService {
   /// Отозвать роль у пользователя.
   Future<void> revokeRole(String userId, String roleId) async {
     await userRoleRepository.revokeRole(userId, roleId);
-    engine.invalidateUserCache(userId);
+    engine.invalidateUser(userId);
   }
 
   /// Получить роли пользователя.
@@ -285,7 +285,7 @@ class RBACService {
       userId,
       resource,
       action,
-      scope,
+      scope: scope,
       context: context,
     );
 
@@ -359,7 +359,7 @@ class RBACService {
 
   /// Получить политику.
   Future<AqAccessPolicy?> getPolicy(String policyId) async {
-    return await policyRepository.getPolicy(policyId);
+    return await policyRepository.findById(policyId);
   }
 
   /// Обновить политику.
@@ -372,7 +372,7 @@ class RBACService {
     int? priority,
     bool? isActive,
   }) async {
-    final existing = await policyRepository.getPolicy(policyId);
+    final existing = await policyRepository.findById(policyId);
     if (existing == null) {
       throw Exception('Policy not found: $policyId');
     }

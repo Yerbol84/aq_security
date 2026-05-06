@@ -41,6 +41,7 @@ final class TokenIssuer {
       exp: now + config.accessTokenTtlSeconds,
       jti: _uuid.v4(),
       sid: session.id,
+      mfaVerified: session.mfaVerified,
     );
 
     final refreshClaims = AqTokenClaims(
@@ -57,6 +58,7 @@ final class TokenIssuer {
       exp: now + config.refreshTokenTtlSeconds,
       jti: _uuid.v4(),
       sid: session.id,
+      mfaVerified: session.mfaVerified,
     );
 
     return TokenPair(
@@ -95,6 +97,7 @@ final class TokenIssuer {
       exp: now + config.accessTokenTtlSeconds,
       jti: _uuid.v4(),
       sid: session.id,
+      mfaVerified: session.mfaVerified,
     );
 
     // New refresh token — extends lifetime from now
@@ -112,6 +115,7 @@ final class TokenIssuer {
       exp: now + config.refreshTokenTtlSeconds,
       jti: _uuid.v4(),
       sid: session.id,
+      mfaVerified: session.mfaVerified,
     );
 
     return TokenPair(

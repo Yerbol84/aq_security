@@ -45,6 +45,20 @@ final class HttpAuthTransport {
     await _post('/auth/logout', {}, bearerToken: accessToken);
   }
 
+  Future<AuthResponse> register({
+    required String email,
+    required String password,
+    String? displayName,
+  }) async {
+    final response = await _post('/auth/register', {
+      'email': email,
+      'password': password,
+      if (displayName != null) 'displayName': displayName,
+    });
+    _expect(response, 201, 'Registration failed');
+    return AuthResponse.fromJson(_decode(response));
+  }
+
   Future<List<AqSession>> listSessions(String accessToken) async {
     final response = await _get('/auth/sessions', bearerToken: accessToken);
     _expect(response, 200, 'Failed to fetch sessions');
